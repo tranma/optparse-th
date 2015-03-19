@@ -4,11 +4,31 @@
 import Options.Applicative
 import TH
 
-newtype MyAwesomeArgument a = MyAwesomeArgument a
+data Command = Create String | Delete Arg
+  deriving (Show, Read)
+data Arg     = Arg Int String
   deriving (Show, Read)
 
-data MyFabulousCommands = Foo (MyAwesomeArgument Int) | Bar Bool
+$(derive ''Command)
+
+data S1
+  = SA
+  | SB [Int] Char
+  | SC P1
+  | SD S2
   deriving (Show, Read)
 
-$(deriveArgument ''MyAwesomeArgument)
-$(deriveCommands ''MyFabulousCommands)
+data P1 = P1 Int Char
+  deriving (Show, Read)
+data S3 = S3A Int Int | S3B Int Char
+  deriving (Show, Read)
+data S2 = R | G | B
+  deriving (Show, Read)
+
+$(derive ''S1)
+
+main :: IO ()
+main = do
+  x <- execParser p_S1_toplevel
+  print x
+
