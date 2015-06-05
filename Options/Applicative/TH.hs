@@ -1,27 +1,27 @@
-{-# LANGUAGE GADTs           #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE QuasiQuotes     #-}
-{-# LANGUAGE DataKinds       #-}
-{-# LANGUAGE TypeOperators   #-}
+{-# LANGUAGE DataKinds        #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs            #-}
+{-# LANGUAGE QuasiQuotes      #-}
+{-# LANGUAGE TemplateHaskell  #-}
+{-# LANGUAGE TypeOperators    #-}
 
 {-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 
 module Options.Applicative.TH
-where
+  ( genOpts
+  , genOptsRead
+  ) where
 
-import Control.Arrow
 import           Control.Applicative
+import           Control.Arrow
 import           Data.Char
-import qualified Data.List                  as L
+import qualified Data.List           as L
 import           Data.Maybe
-import           Data.Monoid ((<>))
-import           Language.Haskell.TH
-import           Language.Haskell.TH.Syntax
-import           Options.Applicative
 import           GHC.TypeLits
-import Data.Proxy
+import           Language.Haskell.TH
+import           Options.Applicative
 
-import Debug.Trace
+import           Debug.Trace
 
 
 genOpts :: Name -> Q [Dec]
@@ -202,6 +202,16 @@ commandE name = do
 reifyTy :: Type -> Q Info
 reifyTy (ConT name) = reify name
 
+-- | Folds some expressions with a left-associative infix operator.
+--
+foldInfix
+  :: Q Exp -- ^ initial exp
+  -> Q Exp -- ^ the operator
+  -> [Q Exp] -> Q Exp
+foldInfix e _ [] = e
+foldInfix e m xs = L.foldl' mkInfix e xs
+  where mkInfix acc x = infixE (Just acc) m (Just x)
+
 infoE :: Name -> Name -> Q Exp
 infoE _ pName =
   [| info $(varE pName) (progDesc "haddock here") |]
@@ -223,9 +233,6 @@ lookupCustom n = L.lookup (show n)
 concatNameS :: [String] -> Name
 concatNameS = mkName . concat
 
-concatName :: [Name] -> Name
-concatName = concatNameS . map nameBase
-
 prependName :: Name -> Name
 prependName name = concatNameS ["p", nameBase name]
 
@@ -238,12 +245,6 @@ stripCmd s = fromMaybe (bail "stripCmd: not a command" s) $ L.stripPrefix "Cmd" 
 decName :: Dec -> Name
 decName (NewtypeD _ n _ _ _) = n
 decName (DataD    _ n _ _ _) = n
-
--- | Get the data constructors of a type constructor.
---
-decDacons :: Dec -> [Con]
-decDacons (DataD    _ _ _ dacons _) = dacons
-decDacons (NewtypeD _ _ _ dacon  _) = [dacon]
 
 -- | Name of a constructor.
 --
@@ -259,20 +260,6 @@ conTypes (NormalC _ t) = map snd t
 conTypes (RecC    _ t) = map trd t
 conTypes _             = error "conName: can't handle this constructor"
 
--- | Folds some expressions with a left-associative infix operator.
---
-foldInfix
-  :: Q Exp -- ^ initial exp
-  -> Q Exp -- ^ the operator
-  -> [Q Exp] -> Q Exp
-foldInfix e _ [] = e
-foldInfix e m xs = L.foldl' mkInfix e xs
-  where mkInfix acc x = infixE (Just acc) m (Just x)
-
-trd (_,_,x) = x
-
-bail s x = error (s ++ ": " ++ show x)
-
 lookupAuto    = VarE . justInScope "auto"   <$> lookupValueName "auto"
 lookupMempty  = VarE . justInScope "mempty" <$> lookupValueName "mempty"
 lookupFmap    = VarE . justInScope "<$>" <$> lookupValueName "<$>"
@@ -283,3 +270,7 @@ lookupParser  = ConT . justInScope "ParserInfo" <$> lookupTypeName "ParserInfo"
 justInScope :: String -> Maybe a -> a
 justInScope n Nothing  = error ("not in scope: " <> n)
 justInScope _ (Just a) = a
+
+trd (_,_,x) = x
+
+bail s x = error (s ++ ": " ++ show x)
