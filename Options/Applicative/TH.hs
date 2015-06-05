@@ -13,7 +13,7 @@ module Options.Applicative.TH
   ) where
 
 import           Control.Applicative
-import           Control.Arrow
+import           Control.Arrow (first)
 import           Data.Char
 import qualified Data.List           as L
 import           Data.Maybe
@@ -31,7 +31,7 @@ genOptsRead :: Name -> [(Name, Name)] -> Q [Dec]
 genOptsRead name readers = do
   d            <- reifyDec name
   tree         <- mkOpt d
-  decls        <- gen (mkReaders readers) tree
+  decls        <- gen (mkReaders readers) "" tree
   (sig, toplv) <- topLevelD name
   return (sig:toplv:decls)
 
@@ -123,81 +123,88 @@ prim0 n = return (A0 n)
 
 -- * Traversal
 
-gen :: KnownNat n => ReadMF -> Opt n -> Q [Dec]
-gen readers (L x) = gen readers x
-gen readers (P0 name) = pure <$> case lookupCustom name readers of
-  Just custom -> readArgD custom name
-  Nothing     -> pureD name
-gen readers (A0 name) = pure <$> case lookupCustom name readers of
-  Just custom -> readArgD custom name
-  Nothing     -> autoArgD name
-gen readers (A1 name fields) = genA readers name fields
-gen readers (A2 name fields) = genA readers name fields
-gen readers (C0 name cmds) = do
-  subDecls <- concat <$> mapM (gen readers) cmds
-  this     <- commandD name (map optName cmds)
+type Prefix = String
+
+gen :: KnownNat n => ReadMF -> Prefix -> Opt n -> Q [Dec]
+gen readers ps (L x) = gen readers ps x
+
+gen readers ps (P0 name) = pure <$> case lookupCustom name readers of
+  Just custom -> readArgD ps custom name
+  Nothing     -> pureD ps name
+
+gen readers ps (A0 name) = pure <$> case lookupCustom name readers of
+  Just custom -> readArgD ps custom name
+  Nothing     -> autoArgD ps name
+
+gen readers ps (A1 name fields) = genA readers (ps <+> name) name fields
+gen readers ps (A2 name fields) = genA readers (ps <+> name) name fields
+
+gen readers ps (C0 name cmds) = do
+  subDecls <- concat <$> mapM (gen readers ps) cmds
+  this     <- commandD ps name (map optName cmds)
   return (this:subDecls)
 
-genA :: KnownNat n => ReadMF -> Name -> [Opt n] -> Q [Dec]
-genA readers name fs = case lookupCustom name readers of
-  Just custom -> pure <$> readArgD custom name
-  Nothing     -> case fs of
-    []     -> error "uhhh"
-    fields -> do
-      subDecls <- concat <$> mapM (gen readers) fields
-      this     <- appArgD name (map optName fields)
-      return (this:subDecls)
+genA :: KnownNat n => ReadMF -> Prefix -> Name -> [Opt n] -> Q [Dec]
+genA readers ps name fields = case lookupCustom name readers of
+  Just custom -> pure <$> readArgD ps custom name
+  Nothing     -> do
+    subDecls <- concat <$> mapM (gen readers ps) fields
+    this     <- appArgD ps name (map optName fields)
+    return (this:subDecls)
 
 --------------------------------------------------------------------------------
 
 -- * Templates
 
-pureD :: Name -> Q Dec
-pureD n = do
-  let pName = prependName n
+pureD :: Prefix -> Name -> Q Dec
+pureD p n = do
+  let pName = funName p n
       pExp = [| pure $(conE n) |]
   funD pName [clause [] (normalB pExp) []]
 
-autoArgD :: Name -> Q Dec
-autoArgD fieldName = do
+autoArgD :: Prefix -> Name -> Q Dec
+autoArgD p fieldName = do
   let pExp  = [| argument $lookupAuto $lookupMempty |]
-      pName = prependName fieldName
+      pName = funName p fieldName
   funD pName [clause [] (normalB pExp) []]
 
-readArgD :: Name -> Name -> Q Dec
-readArgD reader fieldName = do
+readArgD :: Prefix -> Name -> Name -> Q Dec
+readArgD p reader fieldName = do
   let pExp  = [| argument $(varE reader) $lookupMempty |]
-      pName = prependName fieldName
+      pName = funName p fieldName
   funD pName [clause [] (normalB pExp) []]
 
-appArgD :: Name -> [Name] -> Q Dec
-appArgD tyname fieldNames = do
-  let pName = prependName tyname
-  funD pName [clause [] (normalB $ appArgE tyname fieldNames) []]
+appArgD :: Prefix -> Name -> [Name] -> Q Dec
+appArgD p tyname fieldNames = do
+  let pName = mkName $ "p" ++ p
+  funD pName [clause [] (normalB $ appArgE p tyname fieldNames) []]
 
-appArgE :: Name -> [Name] -> Q Exp
-appArgE n []      = [| pure $(conE n) |]
-appArgE n (s:ss)  = foldInfix
+appArgE :: Prefix -> Name -> [Name] -> Q Exp
+appArgE _ n []     = [| pure $(conE n) |]
+appArgE p n (s:ss) = foldInfix
   (infixE (Just (conE n)) lookupFmap (Just (pArgE s)))
   lookupFapp
   (map pArgE ss)
-  where pArgE t = varE $ concatNameS ["p", nameBase n , nameBase t]
+  where pArgE t = varE $ funName p t
 
-commandD :: Name -> [Name] -> Q Dec
-commandD x      []     = bail "commandD: impossibru! no command in" x
-commandD tyname (c:cs) = do
-  let pName = prependName tyname
-      cmds  = foldInfix (commandE c) lookupMappend (map commandE cs)
+commandD :: Prefix -> Name -> [Name] -> Q Dec
+commandD _ x      []     = bail "commandD: impossibru! no command in" x
+commandD p tyname (c:cs) = do
+  let pName = funName p tyname
+      cmds  = foldInfix (commandE p c) lookupMappend (map (commandE p) cs)
       pExp  = [| subparser $cmds |]
   funD pName [clause [] (normalB pExp) []]
 
-commandE :: Name -> Q Exp
-commandE name = do
-  let commandStr = litE . stringL . map toLower . stripCmd . nameBase $ name
-      pInfo      = infoE name (prependName name)
+commandE :: Prefix -> Name -> Q Exp
+commandE p name = do
+  let commandStr = litE . stringL . (p++) . map toLower . stripCmd . nameBase $ name
+      pInfo      = infoE name (funName p name)
   [| command $commandStr $pInfo |]
 
 --------------------------------------------------------------------------------
+
+(<+>) :: Prefix -> Name -> Prefix
+(<+>) p n = p ++ nameBase n
 
 reifyTy :: Type -> Q Info
 reifyTy (ConT name) = reify name
@@ -233,8 +240,8 @@ lookupCustom n = L.lookup (show n)
 concatNameS :: [String] -> Name
 concatNameS = mkName . concat
 
-prependName :: Name -> Name
-prependName name = concatNameS ["p", nameBase name]
+funName :: Prefix -> Name -> Name
+funName prefix name = concatNameS ["p", prefix, nameBase name]
 
 areCommands :: [Con] -> Bool
 areCommands = all (L.isPrefixOf "Cmd" . nameBase . conName)
@@ -245,6 +252,9 @@ stripCmd s = fromMaybe (bail "stripCmd: not a command" s) $ L.stripPrefix "Cmd" 
 decName :: Dec -> Name
 decName (NewtypeD _ n _ _ _) = n
 decName (DataD    _ n _ _ _) = n
+decName (TySynD   n _ _)     = n
+decName x = bail "decName: can't handle" x
+
 
 -- | Name of a constructor.
 --

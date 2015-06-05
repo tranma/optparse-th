@@ -11,8 +11,8 @@ $(genOpts ''Action)
 main = do
   x <- execParser optparseAction
   case x of
-    CmdPing -> print "ping!"
-    CmdPong -> print "pong!"
+    CmdPing -> putStrLn "ping!"
+    CmdPong -> putStrLn "pong!"
 
 {-
 pAction = info (subparser ((command "ping" (info pCmdPing mempty)) <> (command "pong" (info pCmdPong mempty)))) mempty

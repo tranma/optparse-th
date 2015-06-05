@@ -19,7 +19,7 @@ main = bracket_ setup cleanup goAll
     isDir x = doesDirectoryExist (testSrc </> x)
 
 testSrc = "test/cases"
-tmp     = "/tmp/optparse-th"
+tmp     = "tmp"
 hs      = "hs"
 inExt   = "in"
 outExt  = "out"
@@ -48,7 +48,6 @@ compile name = do
       notice "compilation failed!"
       notice err
 
-
 run :: FilePath -> FilePath -> IO ()
 run name test = do
   noticeDot
@@ -57,11 +56,15 @@ run name test = do
       inFile     = testSrc </> name </> test <.> inExt
       expectFile = testSrc </> name </> test <.> outExt
   input          <- readFile inFile
-  expect         <- readFile expectFile
-  (_, output, _) <- readProcessWithExitCode exeoutput [input] ""
+  hasExpect      <- doesFileExist expectFile
+  expect         <- if   hasExpect
+                    then readFile expectFile
+                    else return ""
+  (_, output, err) <- readProcessWithExitCode exeoutput (lines input) ""
   if   trim output == expect
   then notice "OK"
   else do notice $ concat ["FAIL: expecting ", expect, ", got ", output]
+          notice err
           exitFailure
 
 setup :: IO ()
@@ -74,7 +77,7 @@ cleanup :: IO ()
 cleanup = removeDirectoryRecursive tmp
 
 trim :: String -> String
-trim = filter (/= '"') . takeWhile (/='\n')
+trim = takeWhile (/='\n')
 
 notice    = putStrLn
 noticeSep = notice "----------"
